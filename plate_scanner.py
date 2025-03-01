@@ -80,17 +80,13 @@ def scan(frame: cv2.typing.MatLike) -> str:
     original_shape = frame.shape
     img = preprocess_image(frame)
     
-    
     outputs = session.run([output_name], {input_name: img})
-    
     
     boxes, confidences = postprocess(outputs[0], original_shape)
 
-    
     for box in boxes:
         x, y, w, h = map(int, box)
         x1, y1, x2, y2 = x, y, x + w, y + h
-        
         
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
