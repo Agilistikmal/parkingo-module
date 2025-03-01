@@ -1,4 +1,4 @@
-FROM python:alpine3.14
+FROM python:alpine3.13
 COPY . /app
 WORKDIR /app
 RUN pip install onnxruntime
