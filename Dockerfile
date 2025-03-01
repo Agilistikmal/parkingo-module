@@ -1,4 +1,4 @@
-FROM python:3.14
+FROM python:3.14-rc-bookworm
 COPY . /app
 WORKDIR /app
 RUN pip install onnxruntime
