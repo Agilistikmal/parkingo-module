@@ -1,64 +1,82 @@
-from flask import Flask, request
-from dotenv import load_dotenv
 import os
 import plate_scanner
 import numpy as np
 import cv2
 from PIL import Image
 import io
+import json
+import base64
+import paho.mqtt.client as mqtt
 
-app = Flask(__name__)
+# MQTT broker configuration
+broker_address = "localhost"  # Jika dalam Docker, bisa gunakan "mosquitto"
+broker_port = 1883
 
-@app.post("/scanner")
-def scanner():
-    x_api_key = request.headers.get("X-API-KEY")
-    x_mac_address = request.headers.get("X-MAC-ADDRESS")
+def on_message(client, userdata, message):
+    print(f"[📩 Received] Topic: {message.topic}")
+
+    try:
+        # Decode JSON payload
+        payload = json.loads(message.payload.decode("utf-8"))
+        x_api_key = payload.get("X-API-KEY")
+        x_mac_address = payload.get("X-MAC-ADDRESS")
+        image_base64 = payload.get("image")
+    except json.JSONDecodeError:
+        print("[⚠️ ERROR] Payload bukan JSON")
+        return
+
     api_key = os.environ.get("API_KEY")
 
-    if x_api_key == None and x_mac_address == None:
-        return {
+    if not x_api_key or not x_mac_address:
+        response = json.dumps({
+            "mac_address": x_mac_address,
             "error": "Required header X-API-KEY and X-MAC-ADDRESS",
             "data": None
-        }, 400
-    
+        })
+        client.publish("parkingo/response", response)
+        return
+
     if api_key != x_api_key:
-        return {
+        response = json.dumps({
+            "mac_address": x_mac_address,
             "error": "Invalid X-API-KEY",
             "data": None
-        }, 401
-    
-    image = request.files.get("image")
+        })
+        client.publish("parkingo/response", response)
+        return
 
-    if image == None or image.filename == "":
-        return {
-            "error": "Required image files body",
-            "data": None
-        }, 400
-    
+    # Decode gambar dari Base64
     try:
-        image_bytes = image.read()
-        image_stream = io.BytesIO(image_bytes)
-        with Image.open(image) as img:
-            img.verify()
+        image_bytes = base64.b64decode(image_base64)
+        frame = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+    except Exception as e:
+        print(f"[⚠️ ERROR] Gagal mendecode gambar: {e}")
+        return
 
-            image_stream.seek(0)
-            img = Image.open(image_stream)
-        
-            npimg = np.frombuffer(image_bytes, np.uint8)
-            frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
-            
-            plate_number = plate_scanner.scan(frame=frame)
-            
-            return {
-                    "error": None,
-                    "data": plate_number
-                }, 200
-    except (IOError, SyntaxError):
-        return {
-                "error": "Uploaded file is not an image",
-                "data": None
-            }, 400
+    # Scan plat nomor
+    plate_number = plate_scanner.scan(frame=frame)
 
-if __name__ == "__main__":
-    load_dotenv()
-    app.run(host="0.0.0.0", port=5000)
+    # Kirim response dengan MAC Address
+    response = json.dumps({
+        "mac_address": x_mac_address,
+        "error": None,
+        "data": plate_number
+    })
+    client.publish("parkingo/response", response)
+
+def connect_to_broker(client, userdata, flags, reason_code, properties):
+    print("[✅ Connected to MQTT Broker]")
+    client.subscribe("parkingo/scanner")
+
+# Inisialisasi client MQTT dengan Paho v2.x
+client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+
+# Set callback
+client.on_connect = connect_to_broker
+client.on_message = on_message
+
+# Connect ke MQTT broker
+client.connect(broker_address, broker_port)
+
+# Start MQTT loop
+client.loop_forever()
