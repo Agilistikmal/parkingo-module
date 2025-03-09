@@ -9,7 +9,7 @@ import base64
 import paho.mqtt.client as mqtt
 
 # MQTT broker configuration
-broker_address = "localhost"  # Jika dalam Docker, bisa gunakan "mosquitto"
+broker_address = "173.234.15.83"  # Jika dalam Docker, bisa gunakan "mosquitto"
 broker_port = 1883
 
 def on_message(client, userdata, message):

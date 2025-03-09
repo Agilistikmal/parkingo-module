@@ -6,7 +6,7 @@ import dotenv
 import os
 
 # MQTT Configuration
-broker_address = "localhost"
+broker_address = "173.234.15.83"
 broker_port = 1883
 topic_request = "parkingo/scanner"
 topic_response = "parkingo/response"
