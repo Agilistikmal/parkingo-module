@@ -5,9 +5,9 @@
 #include "base64.h"  // Library Base64 encoding
 
 // 🔥 Konfigurasi WiFi & MQTT
-#define WIFI_SSID "Nama_WiFi"
-#define WIFI_PASSWORD "Password_WiFi"
-#define MQTT_BROKER "192.168.1.100"  // Ganti dengan IP broker MQTT
+#define WIFI_SSID "ST"
+#define WIFI_PASSWORD "1234567890"
+#define MQTT_BROKER "173.234.15.83"  // Ganti dengan IP broker MQTT
 #define MQTT_PORT 1883
 #define TOPIC_REQUEST "parkingo/scanner"
 #define TOPIC_RESPONSE "parkingo/response"
