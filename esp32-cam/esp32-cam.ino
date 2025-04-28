@@ -2,12 +2,36 @@
 #include <WiFiClient.h>
 #include <PubSubClient.h>
 #include "esp_camera.h"
-#include "base64.h"  // Library Base64 encoding
+#include "base64.h"
 
-// 🔥 Konfigurasi WiFi & MQTT
-#define WIFI_SSID "ST"
+// PIN
+#define CAMERA_MODEL_AI_THINKER
+#define PWDN_GPIO_NUM  32
+#define RESET_GPIO_NUM -1
+#define XCLK_GPIO_NUM  0
+#define SIOD_GPIO_NUM  26
+#define SIOC_GPIO_NUM  27
+
+#define Y9_GPIO_NUM    35
+#define Y8_GPIO_NUM    34
+#define Y7_GPIO_NUM    39
+#define Y6_GPIO_NUM    36
+#define Y5_GPIO_NUM    21
+#define Y4_GPIO_NUM    19
+#define Y3_GPIO_NUM    18
+#define Y2_GPIO_NUM    5
+#define VSYNC_GPIO_NUM 25
+#define HREF_GPIO_NUM  23
+#define PCLK_GPIO_NUM  22
+// 4 for flash led or 33 for normal led
+#define LED_GPIO_NUM   4
+
+// Wifi Config
+#define WIFI_SSID "AGL 1"
 #define WIFI_PASSWORD "1234567890"
-#define MQTT_BROKER "173.234.15.83"  // Ganti dengan IP broker MQTT
+
+// MQTT Config
+#define MQTT_BROKER "173.234.15.83" 
 #define MQTT_PORT 1883
 #define TOPIC_REQUEST "parkingo/scanner"
 #define TOPIC_RESPONSE "parkingo/response"
@@ -82,12 +106,16 @@ void callback(char* topic, byte* payload, unsigned int length) {
 // 🔥 Fungsi untuk mengambil gambar & mengirim ke MQTT
 void captureAndSend() {
     Serial.println("\n[📸 Capturing image...]");
+    digitalWrite(LED_GPIO_NUM, HIGH);
+    delay(100);
 
     camera_fb_t* fb = esp_camera_fb_get();
     if (!fb) {
         Serial.println("[⚠️ ERROR] Gagal mengambil gambar!");
         return;
     }
+
+    digitalWrite(LED_GPIO_NUM, LOW);
 
     // Konversi gambar ke Base64
     String image_base64 = base64::encode(fb->buf, fb->len);
@@ -123,8 +151,12 @@ void reconnect() {
 void setup() {
     Serial.begin(115200);
 
+    pinMode(LED_GPIO_NUM, OUTPUT);
+    digitalWrite(LED_GPIO_NUM, LOW);
+
     // Koneksi ke WiFi
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    Serial.print("Connecting to WiFi");
     while (WiFi.status() != WL_CONNECTED) {
         delay(500);
         Serial.print(".");
