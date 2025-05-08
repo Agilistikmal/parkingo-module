@@ -7,12 +7,13 @@ import io
 import json
 import base64
 import paho.mqtt.client as mqtt
+from dotenv import load_dotenv
 
 # MQTT broker configuration
 broker_address = "173.234.15.83"  # Jika dalam Docker, bisa gunakan "mosquitto"
 broker_port = 1883
 
-def on_message(client, userdata, message):
+def on_message(client, userdata, message: mqtt.MQTTMessage):
     print(f"[📩 Received] Topic: {message.topic}")
 
     try:
@@ -28,6 +29,7 @@ def on_message(client, userdata, message):
     api_key = os.environ.get("API_KEY")
 
     if not x_api_key or not x_mac_address:
+        print(f"[⚠️ ERROR] Required header X-API-KEY and X-MAC-ADDRESS")
         response = json.dumps({
             "mac_address": x_mac_address,
             "error": "Required header X-API-KEY and X-MAC-ADDRESS",
@@ -37,6 +39,7 @@ def on_message(client, userdata, message):
         return
 
     if api_key != x_api_key:
+        print(f"[⚠️ ERROR] Invalid X-API-KEY: {x_mac_address} {x_api_key}")
         response = json.dumps({
             "mac_address": x_mac_address,
             "error": "Invalid X-API-KEY",
@@ -56,6 +59,11 @@ def on_message(client, userdata, message):
     # Scan plat nomor
     plate_number = plate_scanner.scan(frame=frame)
 
+    print(f"[📩 Response] {plate_number}")
+    if plate_number is not None:
+        # TODO: Check if plate_number is valid booking order API
+        pass
+
     # Kirim response dengan MAC Address
     response = json.dumps({
         "mac_address": x_mac_address,
@@ -68,15 +76,19 @@ def connect_to_broker(client, userdata, flags, reason_code, properties):
     print("[✅ Connected to MQTT Broker]")
     client.subscribe("parkingo/scanner")
 
-# Inisialisasi client MQTT dengan Paho v2.x
-client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+if __name__ == "__main__":
+    # Load environment variables
+    load_dotenv()
 
-# Set callback
-client.on_connect = connect_to_broker
-client.on_message = on_message
+    # Inisialisasi client MQTT dengan Paho v2.x
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 
-# Connect ke MQTT broker
-client.connect(broker_address, broker_port)
+    # Set callback
+    client.on_connect = connect_to_broker
+    client.on_message = on_message
 
-# Start MQTT loop
-client.loop_forever()
+    # Connect ke MQTT broker
+    client.connect(broker_address, broker_port)
+
+    # Start MQTT loop
+    client.loop_forever()

@@ -2,42 +2,38 @@
 #include <WiFiClient.h>
 #include <PubSubClient.h>
 #include "esp_camera.h"
-#include "base64.h"
+#include "base64.h"  // Library Base64 encoding
 
-// PIN
-#define CAMERA_MODEL_AI_THINKER
-#define PWDN_GPIO_NUM  32
-#define RESET_GPIO_NUM -1
-#define XCLK_GPIO_NUM  0
-#define SIOD_GPIO_NUM  26
-#define SIOC_GPIO_NUM  27
-
-#define Y9_GPIO_NUM    35
-#define Y8_GPIO_NUM    34
-#define Y7_GPIO_NUM    39
-#define Y6_GPIO_NUM    36
-#define Y5_GPIO_NUM    21
-#define Y4_GPIO_NUM    19
-#define Y3_GPIO_NUM    18
-#define Y2_GPIO_NUM    5
-#define VSYNC_GPIO_NUM 25
-#define HREF_GPIO_NUM  23
-#define PCLK_GPIO_NUM  22
-// 4 for flash led or 33 for normal led
-#define LED_GPIO_NUM   4
-
-// Wifi Config
+// 🔥 Konfigurasi WiFi & MQTT
 #define WIFI_SSID "AGL 1"
 #define WIFI_PASSWORD "1234567890"
-
-// MQTT Config
-#define MQTT_BROKER "173.234.15.83" 
+#define MQTT_BROKER "173.234.15.83"  // Ganti dengan IP broker MQTT
 #define MQTT_PORT 1883
 #define TOPIC_REQUEST "parkingo/scanner"
 #define TOPIC_RESPONSE "parkingo/response"
 
 // 🔑 API Key Static
 #define API_KEY "cGFya2luZ28tbW9kdWxl"
+
+// PIN
+#define PWDN_GPIO_NUM    -1
+#define RESET_GPIO_NUM   -1
+#define XCLK_GPIO_NUM     0
+#define SIOD_GPIO_NUM    26
+#define SIOC_GPIO_NUM    27
+
+#define Y9_GPIO_NUM      32  // Sebelumnya 35
+#define Y8_GPIO_NUM      35  // Sebelumnya 34
+#define Y7_GPIO_NUM      34  // Sebelumnya 39
+#define Y6_GPIO_NUM      39  // Sebelumnya 36
+#define Y5_GPIO_NUM      36  // Sebelumnya 21
+#define Y4_GPIO_NUM      21  // Sebelumnya 19
+#define Y3_GPIO_NUM      19  // Sebelumnya 18
+#define Y2_GPIO_NUM      18  // Sebelumnya 5
+#define VSYNC_GPIO_NUM   25
+#define HREF_GPIO_NUM    23
+#define PCLK_GPIO_NUM    22
+
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -68,9 +64,10 @@ void initCamera() {
     config.pixel_format = PIXFORMAT_JPEG;
 
     if (psramFound()) {
-        config.frame_size = FRAMESIZE_VGA;
-        config.jpeg_quality = 10;
-        config.fb_count = 2;
+        config.frame_size = FRAMESIZE_QVGA;
+        config.jpeg_quality = 12;
+        config.fb_count = 1;
+
     } else {
         config.frame_size = FRAMESIZE_CIF;
         config.jpeg_quality = 12;
@@ -106,16 +103,12 @@ void callback(char* topic, byte* payload, unsigned int length) {
 // 🔥 Fungsi untuk mengambil gambar & mengirim ke MQTT
 void captureAndSend() {
     Serial.println("\n[📸 Capturing image...]");
-    digitalWrite(LED_GPIO_NUM, HIGH);
-    delay(100);
 
     camera_fb_t* fb = esp_camera_fb_get();
     if (!fb) {
         Serial.println("[⚠️ ERROR] Gagal mengambil gambar!");
         return;
     }
-
-    digitalWrite(LED_GPIO_NUM, LOW);
 
     // Konversi gambar ke Base64
     String image_base64 = base64::encode(fb->buf, fb->len);
@@ -151,17 +144,22 @@ void reconnect() {
 void setup() {
     Serial.begin(115200);
 
-    pinMode(LED_GPIO_NUM, OUTPUT);
-    digitalWrite(LED_GPIO_NUM, LOW);
-
     // Koneksi ke WiFi
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     Serial.print("Connecting to WiFi");
+    int counter = 0;
     while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
         Serial.print(".");
+        delay(1000);
+        counter++;
+        if (counter > 20) {  // Kalau lebih dari 20 detik, restart ESP32
+            Serial.println("\n[⚠️ ERROR] WiFi Connection Failed. Restarting...");
+            ESP.restart();
+        }
     }
     Serial.println("\n[✅ WiFi Connected]");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
 
     // Dapatkan MAC Address ESP32
     mac_address = WiFi.macAddress();
@@ -169,6 +167,14 @@ void setup() {
     Serial.println(mac_address);
 
     // Inisialisasi kamera
+    delay(2000); // Tambahkan delay agar sensor siap
+    sensor_t * s = esp_camera_sensor_get();
+    if (s == NULL) {
+        Serial.println("[⚠️ ERROR] Sensor kamera tidak ditemukan!");
+    } else {
+        Serial.println("[✅ Kamera terdeteksi]");
+    }
+
     initCamera();
 
     // Koneksi MQTT
