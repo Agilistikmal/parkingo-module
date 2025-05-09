@@ -4,9 +4,6 @@
 #include "esp_camera.h"
 #include "base64.h"
 
-// Tambahkan MQTT buffer size
-#define MQTT_MAX_PACKET_SIZE 32768
-
 // PIN
 #define CAMERA_MODEL_AI_THINKER
 #define PWDN_GPIO_NUM  32
@@ -38,7 +35,6 @@
 #define MQTT_PORT 1883
 #define TOPIC_REQUEST "parkingo/scanner"
 #define TOPIC_RESPONSE "parkingo/response"
-#define CHUNK_SIZE 2048  // Kurangi ukuran chunk
 
 // 🔑 API Key Static
 #define API_KEY "cGFya2luZ28tbW9kdWxl"
@@ -72,42 +68,18 @@ void initCamera() {
     config.pixel_format = PIXFORMAT_JPEG;
 
     if (psramFound()) {
-        config.frame_size = FRAMESIZE_VGA;     // Kembali ke VGA (640x480)
-        config.jpeg_quality = 15;              // Naikkan quality sedikit
+        config.frame_size = FRAMESIZE_VGA;
+        config.jpeg_quality = 10;
         config.fb_count = 2;
     } else {
-        config.frame_size = FRAMESIZE_CIF;     // CIF jika tidak ada PSRAM
-        config.jpeg_quality = 15;              // Same quality
+        config.frame_size = FRAMESIZE_CIF;
+        config.jpeg_quality = 12;
         config.fb_count = 1;
     }
 
     if (esp_camera_init(&config) != ESP_OK) {
         Serial.println("[⚠️ ERROR] Kamera gagal diinisialisasi!");
         while (true);
-    }
-
-    sensor_t * s = esp_camera_sensor_get();
-    if (s) {
-        // Konfigurasi tambahan untuk optimisasi gambar
-        s->set_brightness(s, 2);     // Tingkatkan brightness lebih
-        s->set_contrast(s, 2);       // Tingkatkan contrast lebih
-        s->set_saturation(s, 1);     // Sedikit saturasi
-        s->set_special_effect(s, 0); // No special effect
-        s->set_whitebal(s, 1);       // Enable white balance
-        s->set_awb_gain(s, 1);       // Enable auto white balance gain
-        s->set_wb_mode(s, 0);        // Auto white balance
-        s->set_exposure_ctrl(s, 1);  // Enable auto exposure
-        s->set_aec2(s, 0);          // Disable night mode
-        s->set_gain_ctrl(s, 1);      // Enable auto gain control
-        s->set_agc_gain(s, 0);       // No extra gain
-        s->set_gainceiling(s, (gainceiling_t)0);  // No gain ceiling
-        s->set_bpc(s, 0);           // No black pixel correction
-        s->set_wpc(s, 1);           // Enable white pixel correction
-        s->set_raw_gma(s, 1);       // Enable gamma correction
-        s->set_lenc(s, 1);          // Enable lens correction
-        s->set_hmirror(s, 0);       // No horizontal mirror
-        s->set_vflip(s, 0);         // No vertical flip
-        s->set_dcw(s, 1);           // Enable downsize crop
     }
 }
 
@@ -149,9 +121,6 @@ void captureAndSend() {
     String image_base64 = base64::encode(fb->buf, fb->len);
     esp_camera_fb_return(fb);  // Lepaskan buffer kamera
 
-    Serial.print("Image size (bytes): ");
-    Serial.println(image_base64.length());
-
     // Buat payload JSON
     String payload = "{";
     payload += "\"X-API-KEY\": \"" + String(API_KEY) + "\",";
@@ -161,43 +130,24 @@ void captureAndSend() {
 
     Serial.print("Payload size: ");
     Serial.println(payload.length());
-
-    // Try publish with retries
-    int retries = 5;
-    boolean published = false;
-    while (retries > 0 && !published) {
-        published = client.publish(TOPIC_REQUEST, payload.c_str());
-        if (!published) {
-            Serial.println("[⚠️ Publish failed, retrying...]");
-            client.loop();
-            delay(1000);
-            retries--;
-        }
-    }
-
-    if (published) {
-        Serial.println("[✅ Image published successfully]");
-    } else {
-        Serial.println("[❌ Failed to publish image]");
-    }
+    Serial.println("[🚀 SENDING IMAGE...]");
+    boolean result = client.publish(TOPIC_REQUEST, payload.c_str());
+    Serial.print("Publish result: ");
+    Serial.println(result);
 }
 
 // 🔥 Fungsi untuk koneksi MQTT
 void reconnect() {
-    int attempts = 0;
-    while (!client.connected() && attempts < 3) {
+    while (!client.connected()) {
         Serial.print("[🔄 Connecting to MQTT...] ");
-        String clientId = "ESP32CAM-" + mac_address;
-        if (client.connect(clientId.c_str())) {
+        if (client.connect("ESP32Client")) {
             Serial.println("[✅ Connected]");
             client.subscribe(TOPIC_RESPONSE);
-            return;
         } else {
             Serial.print("[⚠️ Failed, rc=");
             Serial.print(client.state());
             Serial.println("] retrying...");
-            attempts++;
-            delay(5000);
+            delay(2000);
         }
     }
 }
@@ -225,9 +175,7 @@ void setup() {
     // Inisialisasi kamera
     initCamera();
 
-    // Koneksi MQTT dengan buffer size yang lebih besar
-    client.setBufferSize(32768);
-    client.setKeepAlive(120);  // Tambah keepalive time
+    // Koneksi MQTT
     client.setServer(MQTT_BROKER, MQTT_PORT);
     client.setCallback(callback);
 }
