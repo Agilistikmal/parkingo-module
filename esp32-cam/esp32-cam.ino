@@ -1,11 +1,15 @@
 #include <WiFi.h>
-#include <WiFiClient.h>
-#include <PubSubClient.h>
+#include <HTTPClient.h>
 #include "esp_camera.h"
 #include "base64.h"
+#include <esp_task_wdt.h>
+#include <ArduinoJson.h>
 
-// Tambahkan MQTT buffer size
-#define MQTT_MAX_PACKET_SIZE 32768
+// Debug flags
+#define DEBUG_MODE true
+
+// Watchdog timeout in seconds
+#define WDT_TIMEOUT 15
 
 // PIN
 #define CAMERA_MODEL_AI_THINKER
@@ -28,24 +32,60 @@
 #define PCLK_GPIO_NUM  22
 // 4 for flash led or 33 for normal led
 #define LED_GPIO_NUM   4
+// Buzzer pin - adjust as needed for your hardware setup
+#define BUZZER_PIN     2
 
-// Wifi Config
-#define WIFI_SSID "AGL 1"
-#define WIFI_PASSWORD "1234567890"
-
-// MQTT Config
-#define MQTT_BROKER "173.234.15.83" 
-#define MQTT_PORT 1883
-#define TOPIC_REQUEST "parkingo/scanner"
-#define TOPIC_RESPONSE "parkingo/response"
-#define CHUNK_SIZE 2048  // Kurangi ukuran chunk
+// API endpoint - changed to HTTP for now to avoid SSL issues
+#define API_ENDPOINT "https://parkingo-module.agil.zip/scanner"
 
 // 🔑 API Key Static
 #define API_KEY "cGFya2luZ28tbW9kdWxl"
 
-WiFiClient espClient;
-PubSubClient client(espClient);
+// WiFi credentials and slot name - UBAH DI SINI
+const char* ssid = "AGL 1";
+const char* password = "1234567890";
+
+const char* parkingSlug = "krasty-krab-uty";
+const char* slotName = "P12";
+
 String mac_address;
+
+// Debug print helper
+void debugPrint(String message) {
+    if (DEBUG_MODE) {
+        Serial.println(message);
+    }
+}
+
+// Function to alert for invalid booking (buzzer and LED)
+void alertInvalidBooking() {
+    Serial.println("[🚨 ALERT] Invalid booking detected!");
+    
+    // Flash LED 5 times and beep buzzer
+    for (int i = 0; i < 5; i++) {
+        // Turn on LED and buzzer
+        digitalWrite(LED_GPIO_NUM, HIGH);
+        tone(BUZZER_PIN, 2000); // 2kHz tone
+        delay(200);
+        
+        // Turn off LED and buzzer
+        digitalWrite(LED_GPIO_NUM, LOW);
+        noTone(BUZZER_PIN);
+        delay(200);
+        
+        // Reset watchdog
+        esp_task_wdt_reset();
+    }
+    
+    // Final long beep
+    digitalWrite(LED_GPIO_NUM, HIGH);
+    tone(BUZZER_PIN, 1500); // 1.5kHz tone
+    delay(500);
+    digitalWrite(LED_GPIO_NUM, LOW);
+    noTone(BUZZER_PIN);
+    
+    esp_task_wdt_reset();
+}
 
 // 🔥 Fungsi untuk inisialisasi kamera ESP32-CAM
 void initCamera() {
@@ -72,12 +112,12 @@ void initCamera() {
     config.pixel_format = PIXFORMAT_JPEG;
 
     if (psramFound()) {
-        config.frame_size = FRAMESIZE_VGA;     // Kembali ke VGA (640x480)
-        config.jpeg_quality = 15;              // Naikkan quality sedikit
+        config.frame_size = FRAMESIZE_CIF;     // Gunakan resolusi CIF yang lebih kecil (352x288)
+        config.jpeg_quality = 20;              // Kualitas lebih rendah untuk mengurangi ukuran
         config.fb_count = 2;
     } else {
-        config.frame_size = FRAMESIZE_CIF;     // CIF jika tidak ada PSRAM
-        config.jpeg_quality = 15;              // Same quality
+        config.frame_size = FRAMESIZE_QVGA;    // QVGA jika tidak ada PSRAM (320x240)
+        config.jpeg_quality = 20;              // Lower quality
         config.fb_count = 1;
     }
 
@@ -111,134 +151,307 @@ void initCamera() {
     }
 }
 
-// 🔥 Callback untuk menerima response dari MQTT
-void callback(char* topic, byte* payload, unsigned int length) {
-    Serial.print("\n[📩 MQTT Response] Topic: ");
-    Serial.println(topic);
-
-    String message;
-    for (unsigned int i = 0; i < length; i++) {
-        message += (char)payload[i];
+// Function to send image data with headers for metadata - simplified for stability
+bool sendImageData(camera_fb_t * fb) {
+    if (!fb) {
+        Serial.println("[⚠️ ERROR] Invalid camera frame buffer");
+        return false;
     }
-
-    Serial.println("Payload: " + message);
-
-    // Cek apakah response mengandung MAC Address ESP32-CAM
-    if (message.indexOf(mac_address) != -1) {
-        Serial.println("[✅ Response cocok dengan MAC Address]");
+    
+    // Reset watchdog before starting HTTP operations
+    esp_task_wdt_reset();
+    
+    bool success = false;
+    bool is_valid_booking = false;
+    
+    Serial.print("Connecting to endpoint: ");
+    Serial.println(API_ENDPOINT);
+    
+    HTTPClient http;
+    
+    // Begin HTTP connection with shorter timeout
+    http.begin(API_ENDPOINT);
+    http.setTimeout(5000); // 5 second timeout - shorter to prevent hanging
+    
+    // Add metadata as HTTP headers with X- prefix
+    http.addHeader("X-API-KEY", API_KEY);
+    http.addHeader("X-MAC-ADDRESS", mac_address);
+    http.addHeader("X-PARKING-SLUG", parkingSlug);
+    http.addHeader("X-SLOT", slotName);
+    http.addHeader("Content-Type", "image/jpeg");
+    
+    Serial.print("Image size: ");
+    Serial.println(fb->len);
+    
+    // Reset watchdog again just before POST
+    esp_task_wdt_reset();
+    
+    // Start the request but don't wait for completion
+    Serial.println("Starting HTTP POST request...");
+    
+    // Actual image POST
+    int httpCode = http.POST(fb->buf, fb->len);
+    
+    Serial.println("HTTP request completed with code: " + String(httpCode));
+    
+    // Reset watchdog after POST
+    esp_task_wdt_reset();
+    
+    // Process response
+    if (httpCode > 0) {
+        Serial.printf("[✅ HTTP Response code: %d]\n", httpCode);
+        if (httpCode == HTTP_CODE_OK) {
+            String payload = http.getString();
+            Serial.println("Response: " + payload);
+            
+            // Parse JSON response
+            DynamicJsonDocument doc(1024);
+            DeserializationError error = deserializeJson(doc, payload);
+            
+            if (!error) {
+                // Check if plate number was detected
+                if (doc["data"].containsKey("plate_number")) {
+                    String plateNumber = doc["data"]["plate_number"];
+                    Serial.println("Detected plate: " + plateNumber);
+                    
+                    // Check booking validity
+                    if (doc["data"].containsKey("is_valid_booking_order")) {
+                        is_valid_booking = doc["data"]["is_valid_booking_order"];
+                        Serial.print("Valid booking order: ");
+                        Serial.println(is_valid_booking ? "YES" : "NO");
+                        
+                        // Trigger alert if not a valid booking
+                        if (!is_valid_booking) {
+                            alertInvalidBooking();
+                        }
+                    }
+                } else {
+                    Serial.println("No plate number detected in response");
+                }
+                
+                success = true;
+            } else {
+                Serial.print("JSON parsing error: ");
+                Serial.println(error.c_str());
+            }
+        } else {
+            Serial.printf("Server responded with non-OK status code: %d\n", httpCode);
+        }
     } else {
-        Serial.println("[⚠️ Response bukan untuk perangkat ini, abaikan]");
+        Serial.printf("[⚠️ HTTP Error: %s]\n", http.errorToString(httpCode).c_str());
+        Serial.println("Endpoint may be unreachable. Continuing operation...");
     }
+    
+    // Always clean up HTTP connection
+    http.end();
+    Serial.println("HTTP connection closed");
+    
+    return success;
 }
 
-// 🔥 Fungsi untuk mengambil gambar & mengirim ke MQTT
+// Function to send HTTP POST request with JSON (kept for reference)
+void sendHttpRequest(String &payload) {
+    HTTPClient http;
+    
+    Serial.print("Connecting to endpoint: ");
+    Serial.println(API_ENDPOINT);
+    
+    // Configure http connection
+    http.begin(API_ENDPOINT);
+    http.addHeader("Content-Type", "application/json");
+    
+    // Send POST request
+    int httpResponseCode = http.POST(payload);
+    
+    // Check response
+    if (httpResponseCode > 0) {
+        Serial.print("[✅ HTTP Response code: ");
+        Serial.print(httpResponseCode);
+        Serial.println("]");
+        
+        String response = http.getString();
+        Serial.println("Response: " + response);
+    }
+    else {
+        Serial.print("[⚠️ HTTP Error code: ");
+        Serial.print(httpResponseCode);
+        Serial.println("]");
+    }
+    
+    // Free resources
+    http.end();
+}
+
+// 🔥 Fungsi untuk mengambil gambar & mengirim via HTTP
 void captureAndSend() {
     Serial.println("\n[📸 Capturing image...]");
+    
+    // Reset watchdog timer
+    esp_task_wdt_reset();
+    
     digitalWrite(LED_GPIO_NUM, HIGH);
     delay(100);
 
     camera_fb_t* fb = esp_camera_fb_get();
     if (!fb) {
         Serial.println("[⚠️ ERROR] Gagal mengambil gambar!");
+        digitalWrite(LED_GPIO_NUM, LOW);
         return;
     }
 
     digitalWrite(LED_GPIO_NUM, LOW);
-
-    // Konversi gambar ke Base64
-    String image_base64 = base64::encode(fb->buf, fb->len);
-    esp_camera_fb_return(fb);  // Lepaskan buffer kamera
-
+    Serial.println("[✅ Image captured]");
     Serial.print("Image size (bytes): ");
-    Serial.println(image_base64.length());
+    Serial.println(fb->len);
+    Serial.print("Free heap: ");
+    Serial.println(ESP.getFreeHeap());
 
-    // Buat payload JSON
-    String payload = "{";
-    payload += "\"X-API-KEY\": \"" + String(API_KEY) + "\",";
-    payload += "\"X-MAC-ADDRESS\": \"" + mac_address + "\",";
-    payload += "\"image\": \"" + image_base64 + "\"";
-    payload += "}";
-
-    Serial.print("Payload size: ");
-    Serial.println(payload.length());
-
-    // Try publish with retries
-    int retries = 5;
-    boolean published = false;
-    while (retries > 0 && !published) {
-        published = client.publish(TOPIC_REQUEST, payload.c_str());
-        if (!published) {
-            Serial.println("[⚠️ Publish failed, retrying...]");
-            client.loop();
-            delay(1000);
-            retries--;
-        }
-    }
-
-    if (published) {
-        Serial.println("[✅ Image published successfully]");
+    // Send image using updated approach
+    bool success = false;
+    
+    // Check heap before sending
+    if (ESP.getFreeHeap() > fb->len + 10000) {
+        Serial.println("Attempting to send image...");
+        success = sendImageData(fb);
+        Serial.println("Send attempt completed");
     } else {
-        Serial.println("[❌ Failed to publish image]");
+        Serial.println("[⚠️ WARNING] Not enough memory to send image safely. Skipping send.");
     }
-}
-
-// 🔥 Fungsi untuk koneksi MQTT
-void reconnect() {
-    int attempts = 0;
-    while (!client.connected() && attempts < 3) {
-        Serial.print("[🔄 Connecting to MQTT...] ");
-        String clientId = "ESP32CAM-" + mac_address;
-        if (client.connect(clientId.c_str())) {
-            Serial.println("[✅ Connected]");
-            client.subscribe(TOPIC_RESPONSE);
-            return;
-        } else {
-            Serial.print("[⚠️ Failed, rc=");
-            Serial.print(client.state());
-            Serial.println("] retrying...");
-            attempts++;
-            delay(5000);
-        }
+    
+    // Free the buffer
+    esp_camera_fb_return(fb);
+    Serial.println("Camera buffer released");
+    
+    if (success) {
+        Serial.println("[✅ Image sent successfully]");
+    } else {
+        Serial.println("[⚠️ Image sending failed or skipped. Will retry on next cycle.");
     }
+    
+    // Final watchdog reset after completing the cycle
+    esp_task_wdt_reset();
 }
 
 void setup() {
     Serial.begin(115200);
+    Serial.println("\n[🚀 ParkingGo Camera Starting...]");
+    
+    // Set up watchdog
+    Serial.println("Setting up watchdog timer...");
+    
+    // Try disabling existing watchdog first
+    esp_task_wdt_deinit();
+    
+    // Initialize with appropriate parameters for your version
+    #if ESP_IDF_VERSION_MAJOR >= 4 // IDF 4+
+        esp_task_wdt_config_t wdtConfig;
+        wdtConfig.timeout_ms = WDT_TIMEOUT * 1000;
+        wdtConfig.idle_core_mask = 0;
+        wdtConfig.trigger_panic = true;
+        esp_task_wdt_init(&wdtConfig);
+    #else // ESP32 Arduino 1.0.x
+        esp_task_wdt_init(WDT_TIMEOUT, true);
+    #endif
+    
+    esp_task_wdt_add(NULL);
+    Serial.println("Watchdog initialized");
 
+    // Setup pins
     pinMode(LED_GPIO_NUM, OUTPUT);
+    pinMode(BUZZER_PIN, OUTPUT);
+    
     digitalWrite(LED_GPIO_NUM, LOW);
-
-    // Koneksi ke WiFi
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    
+    // Connect to WiFi
+    WiFi.begin(ssid, password);
     Serial.print("Connecting to WiFi");
-    while (WiFi.status() != WL_CONNECTED) {
+    
+    // Wait up to 20 seconds for connection
+    unsigned long startAttemptTime = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 20000) {
         delay(500);
         Serial.print(".");
+        esp_task_wdt_reset(); // Reset watchdog while waiting
     }
-    Serial.println("\n[✅ WiFi Connected]");
+    
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("\n[⚠️ Failed to connect to WiFi]");
+        ESP.restart(); // Restart if connection fails
+    } else {
+        Serial.println("\n[✅ WiFi Connected]");
+        Serial.print("IP Address: ");
+        Serial.println(WiFi.localIP());
+    }
 
     // Dapatkan MAC Address ESP32
     mac_address = WiFi.macAddress();
     Serial.print("ESP32 MAC Address: ");
     Serial.println(mac_address);
+    Serial.print("Parking: ");
+    Serial.println(parkingSlug);
+    Serial.print("Slot Name: ");
+    Serial.println(slotName);
 
     // Inisialisasi kamera
+    Serial.println("[🔄 Initializing camera...]");
     initCamera();
+    Serial.println("[✅ Camera initialized]");
 
-    // Koneksi MQTT dengan buffer size yang lebih besar
-    client.setBufferSize(32768);
-    client.setKeepAlive(120);  // Tambah keepalive time
-    client.setServer(MQTT_BROKER, MQTT_PORT);
-    client.setCallback(callback);
+    // Test the buzzer
+    tone(BUZZER_PIN, 1000);
+    delay(100);
+    noTone(BUZZER_PIN);
+
+    // Blink LED to indicate ready
+    for (int i = 0; i < 3; i++) {
+        digitalWrite(LED_GPIO_NUM, HIGH);
+        delay(100);
+        digitalWrite(LED_GPIO_NUM, LOW);
+        delay(100);
+    }
+    
+    Serial.println("[✅ System Ready]");
 }
 
 void loop() {
-    if (!client.connected()) {
-        reconnect();
+    // Reset watchdog at start of loop
+    esp_task_wdt_reset();
+    
+    // Check if WiFi is connected
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[⚠️ WiFi disconnected, reconnecting...]");
+        WiFi.begin(ssid, password);
+        delay(5000);
+        esp_task_wdt_reset(); // Reset watchdog after delay
+        return;
     }
-    client.loop();
 
-    // Kirim gambar setiap 5 detik
+    // Get free heap memory
+    uint32_t freeHeap = ESP.getFreeHeap();
+    Serial.print("Free heap: ");
+    Serial.println(freeHeap);
+    
+    // Add a minimum threshold before trying to capture
+    if (freeHeap < 30000) {
+        Serial.println("[⚠️ Low memory, waiting to recover...]");
+        delay(5000);
+        esp_task_wdt_reset(); // Reset watchdog after delay
+        return;
+    }
+
+    // Kirim gambar setiap 8 detik (increased delay)
+    Serial.println("[🔄 Starting capture cycle...]");
+    
+    // Capture and send, with extra debugging
     captureAndSend();
-    delay(5000);
+    
+    Serial.println("[💤 Waiting for next cycle...]");
+    
+    // Use a series of shorter delays with watchdog resets between
+    for (int i = 0; i < 8; i++) {
+        delay(1000);
+        esp_task_wdt_reset();  // Reset watchdog every second
+    }
+    
+    Serial.println("[🔄 Loop completed]");
 }
