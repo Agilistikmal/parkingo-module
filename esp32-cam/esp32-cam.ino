@@ -214,7 +214,9 @@ bool sendImageData(camera_fb_t * fb) {
                 if (doc["data"].containsKey("plate_number")) {
                     String plateNumber = doc["data"]["plate_number"];
                     Serial.println("Detected plate: " + plateNumber);
-                    plate_detected = true;
+                    
+                    // Only consider plate detected if it's not empty
+                    plate_detected = (plateNumber != "");
                     
                     // Check booking validity
                     if (doc["data"].containsKey("is_valid_booking_order")) {
@@ -222,7 +224,7 @@ bool sendImageData(camera_fb_t * fb) {
                         Serial.print("Valid booking order: ");
                         Serial.println(is_valid_booking ? "YES" : "NO");
                         
-                        // Trigger alert ONLY if plate detected AND booking is invalid
+                        // Trigger alert ONLY if plate detected (not empty) AND booking is invalid
                         if (plate_detected && !is_valid_booking) {
                             alertInvalidBooking();
                         }
