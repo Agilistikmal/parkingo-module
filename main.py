@@ -75,7 +75,7 @@ def validate_booking_order(plate_number, parking_slug, slot):
         return False
 
 # Simple API endpoint that describes WebSocket usage
-@app.route('/ws')
+@app.route('/')
 def index():
     return jsonify({
         "service": "ParkingGo Scanner WebSocket API",
