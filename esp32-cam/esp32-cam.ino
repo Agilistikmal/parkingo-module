@@ -163,6 +163,7 @@ bool sendImageData(camera_fb_t * fb) {
     
     bool success = false;
     bool is_valid_booking = false;
+    bool plate_detected = false;
     
     Serial.print("Connecting to endpoint: ");
     Serial.println(API_ENDPOINT);
@@ -213,6 +214,7 @@ bool sendImageData(camera_fb_t * fb) {
                 if (doc["data"].containsKey("plate_number")) {
                     String plateNumber = doc["data"]["plate_number"];
                     Serial.println("Detected plate: " + plateNumber);
+                    plate_detected = true;
                     
                     // Check booking validity
                     if (doc["data"].containsKey("is_valid_booking_order")) {
@@ -220,8 +222,8 @@ bool sendImageData(camera_fb_t * fb) {
                         Serial.print("Valid booking order: ");
                         Serial.println(is_valid_booking ? "YES" : "NO");
                         
-                        // Trigger alert if not a valid booking
-                        if (!is_valid_booking) {
+                        // Trigger alert ONLY if plate detected AND booking is invalid
+                        if (plate_detected && !is_valid_booking) {
                             alertInvalidBooking();
                         }
                     }
