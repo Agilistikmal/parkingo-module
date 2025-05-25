@@ -4,6 +4,8 @@ import numpy as np
 import onnxruntime as ort
 import pytesseract
 import os
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 
 # Check if tesseract is installed
 try:
@@ -13,7 +15,7 @@ except Exception as e:
     print("[ℹ️ INFO] Please install tesseract: sudo pacman -S tesseract tesseract-data-eng")
     exit(1)
 
-# Load ONNX model
+# Load ONNX model for plate detection
 try:
     session = ort.InferenceSession("./data/best.onnx", providers=["CPUExecutionProvider"])
     input_name = session.get_inputs()[0].name
@@ -21,6 +23,9 @@ try:
 except Exception as e:
     print(f"[⚠️ ERROR] Failed to load ONNX model: {e}")
     exit(1)
+
+# Initialize thread pool for parallel processing
+executor = ThreadPoolExecutor(max_workers=4)
 
 def preprocess_image(image, size=(640, 640)):
     try:
@@ -41,125 +46,276 @@ def postprocess(output, original_shape, conf_threshold=0.25, iou_threshold=0.4):
         img_h, img_w = original_shape[:2]
         scale_w, scale_h = img_w / 640, img_h / 640
 
+        # Define expected aspect ratio range for license plates
+        MIN_ASPECT_RATIO = 2.0  # Width should be at least 2x the height
+        MAX_ASPECT_RATIO = 5.0  # Width should be at most 5x the height
+        
+        # Define minimum and maximum relative size of plate
+        MIN_PLATE_AREA = 0.01  # Plate should be at least 1% of image
+        MAX_PLATE_AREA = 0.5   # Plate should be at most 50% of image
+        
+        # Padding percentage for boxes (10% on each side)
+        PADDING_PERCENT = 0
+
         rows = output.shape[1]
         for i in range(rows):
             row = output[0][i]
-            confidence = row[4]  
+            confidence = row[4]
             if confidence > conf_threshold:
-                x, y, w, h = row[:4]  
-                x1, y1, x2, y2 = int((x - w / 2) * scale_w), int((y - h / 2) * scale_h), int((x + w / 2) * scale_w), int((y + h / 2) * scale_h)
+                x, y, w, h = row[:4]
                 
-                x1, y1 = max(0, x1), max(0, y1)
-                x2, y2 = min(img_w, x2), min(img_h, y2)
+                # Calculate initial box coordinates
+                x1 = int((x - w / 2) * scale_w)
+                y1 = int((y - h / 2) * scale_h)
+                x2 = int((x + w / 2) * scale_w)
+                y2 = int((y + h / 2) * scale_h)
                 
-                boxes.append([x1, y1, x2 - x1, y2 - y1])  
-                confidences.append(float(confidence))
+                # Calculate padding
+                w_padding = int(w * scale_w * PADDING_PERCENT)
+                h_padding = int(h * scale_h * PADDING_PERCENT)
+                
+                # Apply padding
+                x1 = max(0, x1 - w_padding)
+                y1 = max(0, y1 - h_padding)
+                x2 = min(img_w, x2 + w_padding)
+                y2 = min(img_h, y2 + h_padding)
+                
+                width = x2 - x1
+                height = y2 - y1
+                
+                aspect_ratio = width / height if height > 0 else 0
+                relative_area = (width * height) / (img_w * img_h)
+                
+                if (MIN_ASPECT_RATIO <= aspect_ratio <= MAX_ASPECT_RATIO and 
+                    MIN_PLATE_AREA <= relative_area <= MAX_PLATE_AREA):
+                    boxes.append([x1, y1, width, height])
+                    confidences.append(float(confidence))
         
         if len(boxes) == 0:
-            print("[ℹ️ INFO] No license plates detected")
             return [], []
 
         indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_threshold, iou_threshold)
         
         if indices is None or len(indices) == 0:
-            print("[ℹ️ INFO] No license plates after NMS")
             return [], []
         
         final_boxes = [boxes[i] for i in indices.flatten()]
         final_confidences = [confidences[i] for i in indices.flatten()]
+        
+        if len(final_boxes) > 1:
+            sorted_indices = sorted(range(len(final_boxes)), key=lambda k: final_boxes[k][1])
+            final_boxes = [final_boxes[i] for i in sorted_indices]
+            final_confidences = [final_confidences[i] for i in sorted_indices]
+        
         return final_boxes, final_confidences
     except Exception as e:
         print(f"[⚠️ ERROR] Failed to postprocess: {e}")
         return [], []
 
+@lru_cache(maxsize=32)
+def get_tesseract_config(psm):
+    """Cache tesseract configs for better performance"""
+    return f'--oem 3 --psm {psm} -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+
+def preprocess_plate(plate_region):
+    """Optimize plate image for OCR with support for both dark and light backgrounds"""
+    try:
+        # 1. Convert to grayscale
+        gray = cv2.cvtColor(plate_region, cv2.COLOR_BGR2GRAY)
+        
+        # 2. Increase contrast using CLAHE
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        gray = clahe.apply(gray)
+        
+        # 3. Gaussian blur to reduce noise
+        gray = cv2.GaussianBlur(gray, (3,3), 0)
+        
+        # 4. Create both normal and inverted binary images
+        _, thresh_normal = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        _, thresh_inverse = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        
+        # 5. Add white border to both
+        border_size = 20
+        thresh_normal = cv2.copyMakeBorder(thresh_normal, border_size, border_size, 
+                                         border_size, border_size, 
+                                         cv2.BORDER_CONSTANT, value=255)
+        thresh_inverse = cv2.copyMakeBorder(thresh_inverse, border_size, border_size, 
+                                          border_size, border_size, 
+                                          cv2.BORDER_CONSTANT, value=255)
+        
+        # Save debug images
+        cv2.imwrite("debug_plate_normal.jpg", thresh_normal)
+        cv2.imwrite("debug_plate_inverse.jpg", thresh_inverse)
+        
+        # Return both versions for OCR
+        return [thresh_normal, thresh_inverse]
+    except Exception as e:
+        print(f"[⚠️ ERROR] Failed to preprocess plate: {e}")
+        return [plate_region]
+
+def try_ocr_with_psm(image, psm):
+    """Try OCR with specific PSM mode"""
+    try:
+        config = get_tesseract_config(psm)
+        text = pytesseract.image_to_string(image, config=config, lang='eng').strip()
+        return text if text else None
+    except Exception as e:
+        print(f"[⚠️ ERROR] OCR failed with PSM {psm}: {e}")
+        return None
+
 def read_license_plate(frame, box):
     try:
         x, y, w, h = map(int, box)
-        x1, y1, x2, y2 = x, y, x + w, y + h
+        plate_region = frame[y:y+h, x:x+w]
         
-        # Tambah padding
-        padding = 5
-        x1 = max(0, x1 - padding)
-        y1 = max(0, y1 - padding)
-        x2 = min(frame.shape[1], x2 + padding)
-        y2 = min(frame.shape[0], y2 + padding)
-        
-        plate_region = frame[y1:y2, x1:x2]
-        
-        # Save original plate region for debugging
+        # Save original plate for debugging
         cv2.imwrite("debug_plate_original.jpg", plate_region)
         
-        # Convert ke grayscale
-        gray = cv2.cvtColor(plate_region, cv2.COLOR_BGR2GRAY)
+        # Calculate optimal scale based on expected character height
+        target_height = 100  # Optimal height for OCR
+        current_height = h
+        scale = target_height / current_height
         
-        # Adaptive thresholding
-        thresh = cv2.adaptiveThreshold(
-            gray,
-            255,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV,
-            11,
-            2
-        )
+        # Resize plate
+        width = int(w * scale)
+        height = int(h * scale)
+        resized = cv2.resize(plate_region, (width, height), interpolation=cv2.INTER_CUBIC)
         
-        # Noise removal
-        kernel = np.ones((3,3), np.uint8)
-        thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+        # Preprocess plate image - now returns list of processed images
+        processed_images = preprocess_plate(resized)
         
-        # Invert kembali untuk OCR
-        thresh = cv2.bitwise_not(thresh)
+        # Try different PSM modes
+        psm_modes = [6, 7, 3]  # Most common PSM modes for license plates
+        results = []
         
-        # Save preprocessed plate for debugging
-        cv2.imwrite("debug_plate_thresh.jpg", thresh)
+        # Try OCR on each processed image
+        for processed in processed_images:
+            for psm in psm_modes:
+                config = f'--oem 3 --psm {psm}'
+                text = pytesseract.image_to_string(processed, config=config, lang='eng').strip()
+                if text:
+                    results.append(text)
         
-        # Resize gambar 2x lebih besar untuk OCR
-        h, w = thresh.shape
-        thresh = cv2.resize(thresh, (w*2, h*2), interpolation=cv2.INTER_CUBIC)
+        print(f"[🔍 DEBUG] Raw OCR results: {results}")
         
-        # Save resized plate for debugging
-        cv2.imwrite("debug_plate_resized.jpg", thresh)
+        # Clean and validate results
+        cleaned_results = []
+        for text in results:
+            # Remove any non-alphanumeric characters except spaces
+            text = re.sub(r'[^A-Z0-9 ]', '', text.upper())
+            
+            # Try to fix common misreadings
+            text = fix_common_errors(text)
+            
+            if text:
+                cleaned_results.append(text)
         
-        # Configure tesseract for better plate recognition
-        custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-        plate_text = pytesseract.image_to_string(thresh, config=custom_config)
+        print(f"[🔍 DEBUG] Cleaned OCR results: {cleaned_results}")
         
-        cleaned_text = clean_license_plate(plate_text)
-        print(f"[🔍 DEBUG] Raw text: {plate_text.strip()}")
-        print(f"[🔍 DEBUG] Cleaned text: {cleaned_text}")
-        
-        # Jika tidak ada hasil, coba dengan gambar asli
-        if not cleaned_text:
-            print("[🔍 DEBUG] Trying with original image...")
-            plate_text = pytesseract.image_to_string(plate_region, config=custom_config)
-            cleaned_text = clean_license_plate(plate_text)
-            print(f"[🔍 DEBUG] Raw text (original): {plate_text.strip()}")
-            print(f"[🔍 DEBUG] Cleaned text (original): {cleaned_text}")
-        
-        return cleaned_text
+        # Try to clean each result
+        for text in cleaned_results:
+            cleaned = clean_license_plate(text)
+            if cleaned:
+                return cleaned
+                
+        return ""
+            
     except Exception as e:
         print(f"[⚠️ ERROR] Failed to read plate: {e}")
         return ""
 
+def fix_common_errors(text):
+    """Fix common OCR errors in the raw text"""
+    try:
+        # Split text into parts
+        parts = text.split()
+        if len(parts) == 1:
+            # Try to split based on pattern if no spaces
+            matches = re.findall(r'([A-Z0-9]{1,2})?([0-9]{1,4})?([A-Z0-9]{1,3})?', text)
+            if matches:
+                parts = [p for p in matches[0] if p]
+        
+        if not parts:
+            return text
+            
+        # Fix first part (area code)
+        if parts[0] in ['8', '0']:
+            parts[0] = 'B'
+
+        if parts[0] in ['6']:
+            parts[0] = 'G'
+            
+        # Fix middle part (numbers)
+        if len(parts) >= 2:
+            # Replace common number misreadings
+            parts[1] = parts[1].replace('O', '0').replace('I', '1').replace('S', '5')
+            # Ensure 4 digits
+            if parts[1].isdigit():
+                parts[1] = parts[1].zfill(4)
+            
+        # Fix last part (letters)
+        if len(parts) >= 3:
+            last = parts[2]
+            # Common patterns for TOR
+            if re.match(r'^(T[O0]R|T[O0]P|TOP|TQR)$', last):
+                parts[2] = 'TOR'
+                
+        return ' '.join(parts)
+    except Exception as e:
+        print(f"[⚠️ ERROR] Failed to fix common errors: {e}")
+        return text
+
 def clean_license_plate(text):
     try:
-        text = text.upper().strip()
-        text = re.sub(r'[^A-Z0-9 ]', '', text)
+        # First try to fix common errors
+        text = fix_common_errors(text)
         
-        pattern = re.compile(r'^[A-Z]{1,2} \d{1,4}(?: [A-Z]{1,3})?$')
-        match = pattern.match(text)
-        return match.group(0) if match else ""
+        # Remove any non-alphanumeric characters except spaces
+        text = re.sub(r'[^A-Z0-9 ]', '', text.upper())
+        
+        # Normalize spaces
+        text = re.sub(r'\s+', ' ', text.strip())
+        
+        # Pattern for Indonesian license plates
+        # Format: 1-2 letters + 1-4 numbers + 0-3 letters
+        pattern = re.compile(r'^[A-Z]{1,2}\s*[0-9]{1,4}(?:\s*[A-Z]{0,3})?$')
+        
+        if pattern.match(text):
+            # Split into parts
+            parts = text.split()
+            
+            # Handle area code (1-2 letters)
+            area_code = parts[0]
+            if area_code in ['8', '0']:
+                area_code = 'B'
+            if area_code in ['6']:
+                area_code = 'G'
+            
+            # Handle numbers (1-4 digits)
+            numbers = parts[1] if len(parts) > 1 else ''
+            numbers = numbers.zfill(4)  # pad with leading zeros if needed
+            
+            # Handle optional suffix (0-3 letters)
+            letters = parts[2] if len(parts) > 2 else ''
+            
+            # Build final text based on available parts
+            if letters:
+                final_text = f"{area_code} {numbers} {letters}"
+            else:
+                final_text = f"{area_code} {numbers}"
+                
+            return final_text
+            
+        print(f"[⚠️ DEBUG] Text does not match license plate pattern: '{text}'")
+        return ""
+            
     except Exception as e:
         print(f"[⚠️ ERROR] Failed to clean plate text: {e}")
         return ""
 
-# Scanner
 def scan(frame: cv2.typing.MatLike) -> str:
     try:
         print("[🔍 DEBUG] Starting plate detection...")
-        
-        # Save input frame for debugging
-        cv2.imwrite("debug_input.jpg", frame)
         
         original_shape = frame.shape
         img = preprocess_image(frame)
@@ -167,7 +323,7 @@ def scan(frame: cv2.typing.MatLike) -> str:
             return ""
             
         outputs = session.run([output_name], {input_name: img})
-        boxes, confidences = postprocess(outputs[0], original_shape)
+        boxes, confidences = postprocess(outputs[0], original_shape, conf_threshold=0.2, iou_threshold=0.4)
         
         if not boxes:
             print("[ℹ️ INFO] No plates detected")

@@ -35,9 +35,9 @@ def validate_booking_order(plate_number, parking_slug, slot):
         
     try:
         # Get API endpoint from .env file
-        api_base_url = os.environ.get("VALIDATION_API_URL")
+        api_base_url = os.environ.get("API_BASE_URL")
         if not api_base_url:
-            logger.error("VALIDATION_API_URL not set in environment variables")
+            logger.error("API_BASE_URL not set in environment variables")
             return False
             
         endpoint = f"{api_base_url}/v1/bookings/validate"
@@ -78,7 +78,7 @@ def validate_booking_order(plate_number, parking_slug, slot):
 @app.route('/')
 def index():
     return jsonify({
-        "service": "ParkingGo Scanner WebSocket API",
+        "service": "Parkingo Scanner WebSocket API",
         "description": "WebSocket API for realtime scanner feed from ESP32-CAM",
         "websocket_endpoint": "ws://" + request.host,
         "events": {
@@ -149,20 +149,31 @@ def scanner_endpoint():
         # Decode image based on content type
         if 'image/jpeg' in content_type:
             # Direct binary image data
+            logger.info(f"[🔍 DEBUG] Decoding direct JPEG data, size: {len(image_data)} bytes")
             frame = cv2.imdecode(np.frombuffer(image_data, np.uint8), cv2.IMREAD_COLOR)
+            if frame is None:
+                raise ValueError("Failed to decode JPEG data - frame is None")
         else:
             # Assume it's JSON with base64 data
             try:
+                logger.info("[🔍 DEBUG] Attempting to decode JSON data")
                 data = json.loads(image_data)
                 image_base64 = data.get("image")
                 if image_base64:
+                    logger.info("[🔍 DEBUG] Found base64 image data, decoding...")
                     image_bytes = base64.b64decode(image_base64)
+                    logger.info(f"[🔍 DEBUG] Decoded base64 to {len(image_bytes)} bytes")
                     frame = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+                    if frame is None:
+                        raise ValueError("Failed to decode base64 image data - frame is None")
                 else:
                     raise ValueError("No image data found in JSON")
             except json.JSONDecodeError:
                 # If not JSON, try to decode as raw JPEG
+                logger.info("[🔍 DEBUG] JSON decode failed, trying raw JPEG")
                 frame = cv2.imdecode(np.frombuffer(image_data, np.uint8), cv2.IMREAD_COLOR)
+                if frame is None:
+                    raise ValueError("Failed to decode raw data - frame is None")
         
         # Debug: Save image for checking
         cv2.imwrite("debug_input.jpg", frame)
@@ -216,13 +227,13 @@ def scanner_endpoint():
 
     # Return response with MAC Address
     return jsonify({
-        "mac_address": x_mac_address,
-        "parking_slug": x_parking_slug,
-        "slot": x_slot,
         "error": None,
         "data": {
             "plate_number": plate_number,
-            "is_valid_booking_order": is_valid_booking
+            "is_valid_booking_order": is_valid_booking,
+            "mac_address": x_mac_address,
+            "parking_slug": x_parking_slug,
+            "slot": x_slot,
         }
     })
 
