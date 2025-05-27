@@ -60,19 +60,12 @@ def validate_booking_order(plate_number, parking_slug, slot):
         )
         
         # Check if request was successful
-        if response.status_code == 200:
-            result = response.json()
-            is_valid = result.get("is_valid", False)
-            logger.info(f"Booking validation result: {is_valid}")
-            return is_valid
-        else:
-            logger.error(f"Error validating booking: Status code {response.status_code}")
-            logger.error(f"Response: {response.text}")
-            return False
+        result = response.json()
+        return result
             
     except Exception as e:
         logger.exception(f"Error during booking validation: {e}")
-        return False
+        return None
 
 # Simple API endpoint that describes WebSocket usage
 @app.route('/')
@@ -204,7 +197,7 @@ def scanner_endpoint():
     logger.info(f"[📩 Response] Plate: {plate_number}")
     
     # Validate booking order
-    is_valid_booking = validate_booking_order(plate_number, x_parking_slug, x_slot)
+    validate_booking_order_result = validate_booking_order(plate_number, x_parking_slug, x_slot)
     
     # Create WebSocket payload
     payload = {
@@ -213,7 +206,7 @@ def scanner_endpoint():
         'parking_slug': x_parking_slug,
         'slot': x_slot,
         'plate_number': plate_number,
-        'is_valid_booking': is_valid_booking,
+        'validate_booking': validate_booking_order_result,
         'timestamp': time.time()
     }
     
@@ -230,7 +223,7 @@ def scanner_endpoint():
         "error": None,
         "data": {
             "plate_number": plate_number,
-            "is_valid_booking_order": is_valid_booking,
+            "validate_booking": validate_booking_order_result,
             "mac_address": x_mac_address,
             "parking_slug": x_parking_slug,
             "slot": x_slot,
