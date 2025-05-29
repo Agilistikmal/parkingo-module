@@ -45,8 +45,8 @@
 const char* ssid = "AGL 1";
 const char* password = "1234567890";
 
-const char* parkingSlug = "krasty-krab-uty";
-const char* slotName = "P12";
+const char* parkingSlug = "krusty-krab-uty";
+const char* slotName = "P25";
 
 String mac_address;
 
@@ -210,27 +210,28 @@ bool sendImageData(camera_fb_t * fb) {
             DeserializationError error = deserializeJson(doc, payload);
             
             if (!error) {
-                // Check if plate number was detected
-                if (doc["data"].containsKey("plate_number")) {
-                    String plateNumber = doc["data"]["plate_number"];
-                    Serial.println("Detected plate: " + plateNumber);
-                    
-                    // Only consider plate detected if it's not empty
-                    plate_detected = (plateNumber != "");
-                    
-                    // Check booking validity
-                    if (doc["data"].containsKey("is_valid_booking_order")) {
-                        is_valid_booking = doc["data"]["is_valid_booking_order"];
-                        Serial.print("Valid booking order: ");
-                        Serial.println(is_valid_booking ? "YES" : "NO");
+                // Check if there is a validate_booking key
+                if (doc["data"].containsKey("validate_booking")) {
+                    // Check if validate_booking has is_valid key
+                    if (doc["data"]["validate_booking"].containsKey("data")) {
+                        String is_valid = doc["data"]["validate_booking"]["data"]["is_valid"];
+                        Serial.print("Valid booking: ");
+                        Serial.println(is_valid ? "YES" : "NO");
                         
-                        // Trigger alert ONLY if plate detected (not empty) AND booking is invalid
-                        if (plate_detected && !is_valid_booking) {
+                        // Trigger alert ONLY if booking is invalid
+                        if (!is_valid) {
                             alertInvalidBooking();
                         }
+                    } else if (doc["data"]["validate_booking"].containsKey("message")) {
+                        String message = doc["data"]["validate_booking"]["message"];
+                        if (message != "Resource not found") {
+                            alertInvalidBooking();
+                        }
+                    } else {
+                        alertInvalidBooking();
                     }
                 } else {
-                    Serial.println("No plate number detected in response");
+                    alertInvalidBooking();
                 }
                 
                 success = true;

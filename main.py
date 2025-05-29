@@ -56,7 +56,6 @@ def validate_booking_order(plate_number, parking_slug, slot):
         
         # Check if request was successful
         result = response.json()
-        logger.info(f"Validation result: {result}")
         return result
             
     except Exception as e:
