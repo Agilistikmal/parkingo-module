@@ -5,7 +5,6 @@ import cv2
 import json
 import base64
 from flask import Flask, request, jsonify
-from flask_socketio import SocketIO
 from dotenv import load_dotenv
 import logging
 import requests
@@ -21,7 +20,6 @@ logger = logging.getLogger(__name__)
 # Flask app and SocketIO
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'parkingo-websocket-secret'
-socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Validate booking order
 def validate_booking_order(plate_number, parking_slug, slot):
@@ -49,9 +47,6 @@ def validate_booking_order(plate_number, parking_slug, slot):
             "slot": slot
         }
         
-        logger.info(f"Validating booking order: {payload}")
-        logger.info(f"Validation endpoint: {endpoint}")
-        
         # Make API request to validation endpoint
         response = requests.post(
             endpoint, 
@@ -61,42 +56,12 @@ def validate_booking_order(plate_number, parking_slug, slot):
         
         # Check if request was successful
         result = response.json()
+        logger.info(f"Validation result: {result}")
         return result
             
     except Exception as e:
         logger.exception(f"Error during booking validation: {e}")
         return None
-
-# Simple API endpoint that describes WebSocket usage
-@app.route('/')
-def index():
-    return jsonify({
-        "service": "Parkingo Scanner WebSocket API",
-        "description": "WebSocket API for realtime scanner feed from ESP32-CAM",
-        "websocket_endpoint": "ws://" + request.host,
-        "events": {
-            "scanner_image": {
-                "description": "Emitted when a new image is received from ESP32-CAM",
-                "data": {
-                    "image": "Base64 encoded JPEG image",
-                    "mac_address": "ESP32-CAM MAC address",
-                    "parking_slug": "Parking location identifier",
-                    "slot": "Parking slot identifier",
-                    "plate_number": "Detected license plate or null if none detected",
-                    "is_valid_booking": "Boolean indicating if booking is valid"
-                }
-            }
-        },
-        "usage": "Connect to the WebSocket endpoint using Socket.IO client and listen for 'scanner_image' events"
-    })
-
-@socketio.on('connect')
-def handle_connect():
-    logger.info(f"Client connected: {request.sid}")
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    logger.info(f"Client disconnected: {request.sid}")
 
 @app.route('/scanner', methods=['POST'])
 def scanner_endpoint():
@@ -209,14 +174,6 @@ def scanner_endpoint():
         'validate_booking': validate_booking_order_result,
         'timestamp': time.time()
     }
-    
-    # Emit the image and results through WebSocket
-    try:
-        connected_clients = len(socketio.server.eio.sockets)
-        logger.info(f"Broadcasting scanner data to {connected_clients} connected clients")
-        socketio.emit('scanner_image', payload)
-    except Exception as e:
-        logger.exception(f"Error broadcasting to WebSocket: {e}")
 
     # Return response with MAC Address
     return jsonify({
@@ -237,8 +194,6 @@ if __name__ == "__main__":
     # Get the port from environment or use default
     port = int(os.environ.get("PORT", 5000))
     
-    # Run the Flask app with SocketIO
-    logger.info(f"[🚀 Starting WebSocket server on port {port}]")
-    logger.info(f"WebSocket endpoint: ws://0.0.0.0:{port}/")
-    logger.info(f"Use a Socket.IO client to connect and listen for 'scanner_image' events")
-    socketio.run(app, host='0.0.0.0', port=port, debug=True, allow_unsafe_werkzeug=True)
+    # Run the Flask app
+    logger.info(f"Server endpoint: http://0.0.0.0:{port}/")
+    app.run(host='0.0.0.0', port=port, debug=True)
