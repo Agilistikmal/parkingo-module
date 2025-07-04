@@ -4,15 +4,9 @@
 #include "base64.h"
 #include <esp_task_wdt.h>
 #include <ArduinoJson.h>
-#include <Wire.h>
 
 // Debug flags
 #define DEBUG_MODE true
-
-// RGB LED Pins
-#define RGB_RED_PIN   14
-#define RGB_GREEN_PIN 15
-#define RGB_BLUE_PIN  13
 
 // Watchdog timeout in seconds
 #define WDT_TIMEOUT 15
@@ -63,123 +57,32 @@ void debugPrint(String message) {
     }
 }
 
-// Function to send HTTP POST request with JSON (kept for reference)
-void sendHttpRequest(String &payload) {
-    HTTPClient http;
-    
-    Serial.print("Connecting to endpoint: ");
-    Serial.println(API_ENDPOINT);
-    
-    // Configure http connection
-    http.begin(API_ENDPOINT);
-    http.addHeader("Content-Type", "application/json");
-    
-    // Send POST request
-    int httpResponseCode = http.POST(payload);
-    
-    // Check response
-    if (httpResponseCode > 0) {
-        Serial.print("[✅ HTTP Response code: ");
-        Serial.print(httpResponseCode);
-        Serial.println("]");
-        
-        String response = http.getString();
-        Serial.println("Response: " + response);
-    }
-    else {
-        Serial.print("[⚠️ HTTP Error code: ");
-        Serial.print(httpResponseCode);
-        Serial.println("]");
-    }
-    
-    // Free resources
-    http.end();
-}
-
-// RGB LED Control Functions
-void initRGBLED() {
-    pinMode(RGB_RED_PIN, OUTPUT);
-    pinMode(RGB_GREEN_PIN, OUTPUT);
-    pinMode(RGB_BLUE_PIN, OUTPUT);
-    // Turn off all colors
-    digitalWrite(RGB_RED_PIN, LOW);
-    digitalWrite(RGB_GREEN_PIN, LOW);
-    digitalWrite(RGB_BLUE_PIN, LOW);
-}
-
-void setColor(bool red, bool green, bool blue) {
-    digitalWrite(RGB_RED_PIN, red);
-    digitalWrite(RGB_GREEN_PIN, green);
-    digitalWrite(RGB_BLUE_PIN, blue);
-}
-
-// Status color functions
-void showStarting() {
-    // Blue color
-    setColor(0, 0, 1);
-}
-
-void showConnecting() {
-    // Blue blinking
-    setColor(0, 0, 1);
-    delay(1000);
-    setColor(0, 0, 0);
-    delay(500);
-}
-
-void showReady() {
-    // Green color
-    setColor(0, 1, 0);
-}
-
-void showAvailable() {
-    // Green color
-    setColor(0, 1, 0);
-}
-
-void showError() {
-    // Red color blink 3 times
-    for (int i = 0; i < 3; i++) {
-        setColor(1, 0, 0);
-        digitalWrite(BUZZER_PIN, HIGH);
-        delay(500);
-        setColor(0, 0, 0);
-        digitalWrite(BUZZER_PIN, LOW);
-    }
-}
-
-void showCapturing() {
-    setColor(0, 0, 0);
-    digitalWrite(BUZZER_PIN, HIGH);
-    delay(1000);
-    digitalWrite(BUZZER_PIN, LOW);
-}
-
-void showProcessing() {
-    setColor(0, 0, 0);
-}
-
-// Function to alert for invalid booking (RGB LED)
+// Function to alert for invalid booking (buzzer and LED)
 void alertInvalidBooking() {
     Serial.println("[🚨 ALERT] Invalid booking detected!");
     
-    // Flash Red LED 5 times
+    // Flash LED 5 times and beep buzzer
     for (int i = 0; i < 5; i++) {
-        setColor(1, 0, 0);  // Red ON
-        digitalWrite(BUZZER_PIN, HIGH);
-        delay(1000);
-        setColor(0, 0, 0);  // All OFF
-        digitalWrite(BUZZER_PIN, LOW);
-        delay(1000);
+        // Turn on LED and buzzer
+        digitalWrite(LED_GPIO_NUM, HIGH);
+        tone(BUZZER_PIN, 2000); // 2kHz tone
+        delay(200);
+        
+        // Turn off LED and buzzer
+        digitalWrite(LED_GPIO_NUM, LOW);
+        noTone(BUZZER_PIN);
+        delay(200);
+        
+        // Reset watchdog
         esp_task_wdt_reset();
     }
     
-    // Final long red flash
-    setColor(1, 0, 0);
-    digitalWrite(BUZZER_PIN, HIGH);
-    delay(2000);
-    setColor(0, 0, 0);
-    digitalWrite(BUZZER_PIN, LOW);
+    // Final long beep
+    digitalWrite(LED_GPIO_NUM, HIGH);
+    tone(BUZZER_PIN, 1500); // 1.5kHz tone
+    delay(500);
+    digitalWrite(LED_GPIO_NUM, LOW);
+    noTone(BUZZER_PIN);
     
     esp_task_wdt_reset();
 }
@@ -326,14 +229,13 @@ bool sendImageData(camera_fb_t * fb) {
                             } else if (doc["data"]["validate_booking"].containsKey("message")) {
                                 String message = doc["data"]["validate_booking"]["message"];
                                 if (message != "Resource not found") {
-                                    // Ignore, slot is available
-                                    showAvailable();
+                                    alertInvalidBooking();
                                 }
                             } else {
-                                showError();
+                                alertInvalidBooking();
                             }
                         } else {
-                            showError();
+                            alertInvalidBooking();
                         }
                     }
                 }
@@ -357,6 +259,39 @@ bool sendImageData(camera_fb_t * fb) {
     Serial.println("HTTP connection closed");
     
     return success;
+}
+
+// Function to send HTTP POST request with JSON (kept for reference)
+void sendHttpRequest(String &payload) {
+    HTTPClient http;
+    
+    Serial.print("Connecting to endpoint: ");
+    Serial.println(API_ENDPOINT);
+    
+    // Configure http connection
+    http.begin(API_ENDPOINT);
+    http.addHeader("Content-Type", "application/json");
+    
+    // Send POST request
+    int httpResponseCode = http.POST(payload);
+    
+    // Check response
+    if (httpResponseCode > 0) {
+        Serial.print("[✅ HTTP Response code: ");
+        Serial.print(httpResponseCode);
+        Serial.println("]");
+        
+        String response = http.getString();
+        Serial.println("Response: " + response);
+    }
+    else {
+        Serial.print("[⚠️ HTTP Error code: ");
+        Serial.print(httpResponseCode);
+        Serial.println("]");
+    }
+    
+    // Free resources
+    http.end();
 }
 
 // 🔥 Fungsi untuk mengambil gambar & mengirim via HTTP
@@ -409,10 +344,6 @@ void setup() {
     Serial.begin(115200);
     Serial.println("\n[🚀 ParkingGo Camera Starting...]");
     
-    // Initialize RGB LED
-    initRGBLED();
-    showStarting();
-    
     // Set up watchdog
     Serial.println("Setting up watchdog timer...");
     
@@ -435,31 +366,29 @@ void setup() {
 
     // Setup pins
     pinMode(LED_GPIO_NUM, OUTPUT);
+    pinMode(BUZZER_PIN, OUTPUT);
+    
     digitalWrite(LED_GPIO_NUM, LOW);
     
     // Connect to WiFi
     WiFi.begin(ssid, password);
     Serial.print("Connecting to WiFi");
-    showConnecting();
     
     // Wait up to 20 seconds for connection
     unsigned long startAttemptTime = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 20000) {
-        showConnecting();
+        delay(500);
         Serial.print(".");
         esp_task_wdt_reset(); // Reset watchdog while waiting
     }
     
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("\n[⚠️ Failed to connect to WiFi]");
-        showError();
-        delay(2000);
         ESP.restart(); // Restart if connection fails
     } else {
         Serial.println("\n[✅ WiFi Connected]");
         Serial.print("IP Address: ");
         Serial.println(WiFi.localIP());
-        showReady();
     }
 
     // Dapatkan MAC Address ESP32
@@ -476,14 +405,18 @@ void setup() {
     initCamera();
     Serial.println("[✅ Camera initialized]");
 
+    // Test the buzzer
+    tone(BUZZER_PIN, 1000);
+    delay(100);
+    noTone(BUZZER_PIN);
+
     // Blink LED to indicate ready
     for (int i = 0; i < 3; i++) {
-        showReady();
+        digitalWrite(LED_GPIO_NUM, HIGH);
         delay(100);
-        setColor(0, 0, 0);
+        digitalWrite(LED_GPIO_NUM, LOW);
         delay(100);
     }
-    showReady();
     
     Serial.println("[✅ System Ready]");
 }
@@ -495,7 +428,7 @@ void loop() {
     // Check if WiFi is connected
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("[⚠️ WiFi disconnected, reconnecting...]");
-        showError();
+        WiFi.begin(ssid, password);
         delay(5000);
         esp_task_wdt_reset(); // Reset watchdog after delay
         return;
@@ -509,7 +442,6 @@ void loop() {
     // Add a minimum threshold before trying to capture
     if (freeHeap < 30000) {
         Serial.println("[⚠️ Low memory, waiting to recover...]");
-        showError();
         delay(5000);
         esp_task_wdt_reset(); // Reset watchdog after delay
         return;
@@ -517,7 +449,6 @@ void loop() {
 
     // Kirim gambar setiap 8 detik (increased delay)
     Serial.println("[🔄 Starting capture cycle...]");
-    showCapturing();
     
     // Capture and send, with extra debugging
     digitalWrite(LED_GPIO_NUM, HIGH);
@@ -525,7 +456,6 @@ void loop() {
     digitalWrite(LED_GPIO_NUM, LOW);
     
     Serial.println("[💤 Waiting for next cycle...]");
-    showReady();
     
     // Use a series of shorter delays with watchdog resets between
     for (int i = 0; i < 8; i++) {

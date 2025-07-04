@@ -143,10 +143,6 @@ def preprocess_plate(plate_region):
                                           border_size, border_size, 
                                           cv2.BORDER_CONSTANT, value=255)
         
-        # Save debug images
-        cv2.imwrite("debug_plate_normal.jpg", thresh_normal)
-        cv2.imwrite("debug_plate_inverse.jpg", thresh_inverse)
-        
         # Return both versions for OCR
         return [thresh_normal, thresh_inverse]
     except Exception as e:
@@ -167,9 +163,6 @@ def read_license_plate(frame, box):
     try:
         x, y, w, h = map(int, box)
         plate_region = frame[y:y+h, x:x+w]
-        
-        # Save original plate for debugging
-        cv2.imwrite("debug_plate_original.jpg", plate_region)
         
         # Calculate optimal scale based on expected character height
         target_height = 100  # Optimal height for OCR
@@ -196,8 +189,6 @@ def read_license_plate(frame, box):
                 if text:
                     results.append(text)
         
-        print(f"[🔍 DEBUG] Raw OCR results: {results}")
-        
         # Clean and validate results
         cleaned_results = []
         for text in results:
@@ -209,8 +200,6 @@ def read_license_plate(frame, box):
             
             if text:
                 cleaned_results.append(text)
-        
-        print(f"[🔍 DEBUG] Cleaned OCR results: {cleaned_results}")
         
         # Try to clean each result
         for text in cleaned_results:
@@ -293,7 +282,8 @@ def clean_license_plate(text):
             
             # Handle numbers (1-4 digits)
             numbers = parts[1] if len(parts) > 1 else ''
-            numbers = numbers.zfill(4)  # pad with leading zeros if needed
+            # Remove leading zeros if they exist
+            numbers = str(int(numbers)) if numbers.isdigit() else numbers
             
             # Handle optional suffix (0-3 letters)
             letters = parts[2] if len(parts) > 2 else ''
@@ -306,7 +296,6 @@ def clean_license_plate(text):
                 
             return final_text
             
-        print(f"[⚠️ DEBUG] Text does not match license plate pattern: '{text}'")
         return ""
             
     except Exception as e:
@@ -315,37 +304,20 @@ def clean_license_plate(text):
 
 def scan(frame: cv2.typing.MatLike) -> str:
     try:
-        print("[🔍 DEBUG] Starting plate detection...")
-        
-        original_shape = frame.shape
-        img = preprocess_image(frame)
-        if img is None:
-            return ""
-            
-        outputs = session.run([output_name], {input_name: img})
-        boxes, confidences = postprocess(outputs[0], original_shape, conf_threshold=0.2, iou_threshold=0.4)
+        outputs = session.run([output_name], {input_name: preprocess_image(frame)})
+        boxes, confidences = postprocess(outputs[0], frame.shape, conf_threshold=0.2, iou_threshold=0.4)
         
         if not boxes:
-            print("[ℹ️ INFO] No plates detected")
             return ""
             
-        print(f"[🔍 DEBUG] Found {len(boxes)} potential plates")
-        
         # Process all detected plates
         best_plate = ""
         for i, box in enumerate(boxes):
-            print(f"[🔍 DEBUG] Processing plate {i+1}/{len(boxes)}")
             plate_text = read_license_plate(frame, box)
             if plate_text:  # If valid plate found
                 best_plate = plate_text
                 break  # Use first valid plate
                 
-        # Save annotated frame for debugging
-        for box in boxes:
-            x, y, w, h = map(int, box)
-            cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-        cv2.imwrite("debug_output.jpg", frame)
-        
         return best_plate
     except Exception as e:
         print(f"[⚠️ ERROR] Error in plate scanning: {e}")
