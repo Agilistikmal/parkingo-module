@@ -182,10 +182,10 @@ def draw_plate_box(img, box, plate_text, validation_status=None):
     if validation_status:
         if validation_status.get("data", {}).get("is_valid", False):
             status_color = (0, 255, 0)  # Green for valid
-            status_text = f"VALID ({validation_status.get('data', {}).get('similarity', 0)}%)"
+            status_text = f"VALID ({validation_status.get('data', {}).get('similarity', 0) * 100}%)"
         else:
             status_color = (0, 0, 255)  # Red for invalid
-            status_text = f"INVALID ({validation_status.get('data', {}).get('similarity', 0)}%)"
+            status_text = f"INVALID ({validation_status.get('data', {}).get('similarity', 0) * 100}%)"
             
         status_y = text_y + 25
         draw_text_with_background(img, status_text, (x, status_y), color=status_color)
