@@ -137,6 +137,9 @@ def validate_booking_order(plate_number, parking_slug, slot):
             json=payload,
             headers={"Content-Type": "application/json"}
         )
+
+        if response.status_code == 404:
+            return None
         
         # Check if request was successful
         result = response.json()
@@ -189,6 +192,9 @@ def draw_plate_box(img, box, plate_text, validation_status=None):
             
         status_y = text_y + 25
         draw_text_with_background(img, status_text, (x, status_y), color=status_color)
+    else:
+        status_y = text_y + 25
+        draw_text_with_background(img, "AVAILABLE (Belum ada pemesanan)", (x, status_y), color=(0, 255, 255))
 
 def main():
     # Load environment variables
