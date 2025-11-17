@@ -10,6 +10,8 @@ import logging
 import threading
 from queue import Queue
 
+from sound import play_sound
+
 try:
     import tkinter as tk
 
@@ -248,6 +250,11 @@ class CameraHandler:
                     current_results["plate"],
                     current_results["validation"],
                 )
+                play_sound_for_validation_status(
+                    self.camera_source,
+                    current_results["plate"],
+                    current_results["validation"],
+                )
 
         # Draw the original information display (top-left corner)
         if current_results["plate"]:
@@ -333,8 +340,13 @@ def validate_booking_order(plate_number, parking_slug, slot):
         if response.status_code == 404:
             return None
 
+        if response.status_code != 200:
+            logger.warning(f"Error during booking validation: {response.status_code}")
+            return None
+
         # Check if request was successful
         result = response.json()
+        print(result)
         return result
 
     except Exception as e:
@@ -395,6 +407,18 @@ def draw_plate_box(img, box, plate_text, validation_status=None):
         draw_text_with_background(
             img, "AVAILABLE (Belum ada pemesanan)", (x, status_y), color=(0, 255, 255)
         )
+
+
+def play_sound_for_validation_status(
+    camera_source: str, plate_number: str, validation_status=None
+):
+    if validation_status:
+        if validation_status.get("data", {}).get("is_valid", False):
+            play_sound("valid", camera_source, plate_number)
+        else:
+            play_sound("invalid", camera_source, plate_number)
+    else:
+        play_sound("guest", camera_source, plate_number)
 
 
 def get_screen_size():
