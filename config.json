@@ -1,0 +1,12 @@
+{
+  "display_mode": "grid",
+  "grid_cols": 1,
+  "cameras": [
+    {
+      "source": 0,
+      "name": "Krusty Krab UTY",
+      "parking_slug": "krusty-krab-uty",
+      "slot": "P25"
+    }
+  ]
+}
