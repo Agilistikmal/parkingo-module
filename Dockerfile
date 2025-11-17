@@ -1,4 +1,4 @@
-FROM python:latest
+FROM python:3.13.2
 COPY . /app
 WORKDIR /app
 RUN apt-get update && apt-get install -y libgl1 libglib2.0-0 tesseract-ocr

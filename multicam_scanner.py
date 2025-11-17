@@ -142,6 +142,11 @@ class CameraHandler:
                                     plate=plate_number, validation=validation_result
                                 )
                                 break
+                    else:
+                        # No plate found, set validation to None
+                        # Update slot to available
+                        update_slot_to_available(self.parking_slug, self.slot)
+                        self.detection_result.update(plate=None, validation=None)
 
                 except Exception as e:
                     logger.error(
@@ -346,12 +351,45 @@ def validate_booking_order(plate_number, parking_slug, slot):
 
         # Check if request was successful
         result = response.json()
-        print(result)
         return result
 
     except Exception as e:
         logger.exception(f"Error during booking validation: {e}")
         return None
+
+
+def update_slot_to_available(parking_slug, slot):
+    """
+    Update the slot to available using the external update slot API
+    """
+    try:
+        # Get API endpoint from .env file
+        api_base_url = os.environ.get("API_BASE_URL")
+        if not api_base_url:
+            logger.error("API_BASE_URL not set in environment variables")
+            return False
+
+        status = "AVAILABLE"
+        endpoint = f"{api_base_url}/v1/parkings/slug/{parking_slug}/slot/{slot}/status/{status}"
+
+        # Make API request to update slot endpoint
+        response = requests.patch(
+            endpoint,
+            headers={
+                "Content-Type": "application/json",
+                "X-API-KEY": os.environ.get("API_KEY"),
+            },
+        )
+
+        if response.status_code != 200:
+            logger.warning(f"Error updating slot to available: {response.status_code}")
+            return False
+
+        return True
+
+    except Exception as e:
+        logger.exception(f"Error updating slot to available: {e}")
+        return False
 
 
 def draw_text_with_background(
@@ -395,10 +433,14 @@ def draw_plate_box(img, box, plate_text, validation_status=None):
     if validation_status:
         if validation_status.get("data", {}).get("is_valid", False):
             status_color = (0, 255, 0)  # Green for valid
-            status_text = f"VALID ({validation_status.get('data', {}).get('similarity', 0) * 100}%)"
+            status_text = (
+                f"VALID ({validation_status.get('data', {}).get('reason', '')})"
+            )
         else:
             status_color = (0, 0, 255)  # Red for invalid
-            status_text = f"INVALID ({validation_status.get('data', {}).get('similarity', 0) * 100}%)"
+            status_text = (
+                f"INVALID ({validation_status.get('data', {}).get('reason', '')})"
+            )
 
         status_y = text_y + 25
         draw_text_with_background(img, status_text, (x, status_y), color=status_color)
