@@ -1,12 +1,19 @@
 {
   "display_mode": "grid",
-  "grid_cols": 1,
+  "grid_cols": 2,
   "cameras": [
     {
       "source": 0,
-      "name": "Krusty Krab UTY",
+      "name": "Krusty Krab UTY - P25",
       "parking_slug": "krusty-krab-uty",
       "slot": "P25"
+    },
+    {
+      "source": "rtsp://81185121:Parkingo2110@192.168.18.209:554/stream0",
+      "name": "Krusty Krab UTY - P24",
+      "parking_slug": "krusty-krab-uty",
+      "slot": "P24",
+      "source_type": "RTSP"
     }
   ]
 }
